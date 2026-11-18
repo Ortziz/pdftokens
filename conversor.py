@@ -808,6 +808,14 @@ def convertir_pdf(ruta, o, ocr, estado, desplaza):
     pdf = pdfplumber.open(str(ruta))
     doc = pdfium.PdfDocument(str(ruta))
     paginas = parsear_paginas(o.paginas, len(pdf.pages))
+    if o.paginas:
+        mayor = max((int(x) for x in re.findall(r"\d+", o.paginas)), default=0)
+        if not paginas:
+            aviso(f"ninguna de las páginas pedidas ({o.paginas}) existe: el PDF tiene "
+                  f"{len(pdf.pages)} páginas y el resultado queda VACÍO")
+        elif mayor > len(pdf.pages):
+            aviso(f"has pedido hasta la página {mayor} pero el PDF tiene {len(pdf.pages)}; "
+                  "se convierten solo las que existen")
     datos = []
     for n, idx in enumerate(paginas, 1):
         print(f"\r  {ruta.name}: página {n}/{len(paginas)}", end="", file=sys.stderr, flush=True)

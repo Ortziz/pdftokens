@@ -65,20 +65,54 @@ como `[IMG F01]`.
 | Páginas escaneadas | OCR de la página entera |
 | Logotipos repetidos | Se descartan |
 
-## Opciones útiles
+## Opciones
 
-| Opción | Para qué |
+### Qué convertir y dónde dejarlo
+
+| Opción | Qué hace |
 |---|---|
-| `--imagenes auto` | Pasa las capturas de texto a texto por OCR: ahorra tokens pero **puede introducir errores**; no usar si importa cada carácter |
-| `--sin-imagenes` (o `--imagenes omitir`) | No genera ninguna imagen: solo texto. Donde había una figura queda `[imagen omitida]` (más el texto de sus etiquetas si era un esquema). Las páginas escaneadas se siguen leyendo por OCR |
-| `--unir` | Un solo `.md` con todos los PDFs |
-| `--laminas` | Agrupa las imágenes en pocas láminas (menos archivos que subir) |
-| `--paginas "1-10,15"` | Solo esas páginas |
-| `--sin-paginas` | Quita las marcas `[p.N]` |
-| `--max-lado 800` | Imágenes más pequeñas (cuestan menos) |
+| `pdfs` (sin guion) | Uno o varios PDFs, o una carpeta (convierte todos los `.pdf` que haya dentro) |
+| `-o CARPETA` | Carpeta donde se crean las subcarpetas de salida `c_AAAAMMDD_nombre`. Por defecto `salida_ia` |
+| `--paginas "1-10,15"` | Solo esas páginas. Con una carpeta, se aplica igual a cada PDF; las páginas que no existan se ignoran y el informe avisa |
+| `--unir` | Un solo `.md` y una sola carpeta para todos los PDFs. Los títulos de cada PDF bajan un nivel, van tras `# Documento: nombre`, y las figuras se numeran seguidas (F01, F02…) |
+| `--nombre-unido NOMBRE` | Solo con `--unir`: sustituye `documentos` en el nombre de la carpeta y del `.md` |
+
+### Imágenes (lo que más tokens cuesta)
+
+| Opción | Qué hace |
+|---|---|
+| `--imagenes mantener` (por defecto) | Esquemas, gráficos y capturas se guardan como imagen. Es lo más fiel; el modo seguro para código en capturas |
+| `--imagenes auto` | Las capturas que parecen texto (terminal, código) pasan a texto por OCR y quedan sin imagen. Ahorra tokens pero **puede introducir errores**; no usar si importa cada carácter. Solo actúa sobre imágenes incrustadas, no sobre esquemas dibujados. Necesita Tesseract |
+| `--imagenes omitir` o `--sin-imagenes` | No genera ninguna imagen: solo texto. Donde había una figura queda `[imagen omitida]` (más el texto de sus etiquetas si era un esquema). Las páginas escaneadas se siguen leyendo por OCR |
+| `--laminas` | Agrupa las imágenes en láminas (`L1.png`, `L2.png`…) con etiquetas tipo `F03 (p.4)`. Menos archivos que subir, no menos tokens |
+| `--max-lado 1000` | Lado largo máximo (px) de cada imagen. Una de 1000×1000 cuesta unos 1.300 tokens. Bajarlo ahorra, pero el texto dentro de las capturas puede dejar de leerse bien: con código, pruébalo antes |
+| `--area-minima 0.004` | Ignora imágenes menores que esa fracción de la página (0,004 ≈ 45×45 puntos en un A4: descarta iconos y viñetas). Súbelo si salen imágenes basura, bájalo si se pierde una figura pequeña |
+
+### OCR (Tesseract)
+
+| Opción | Qué hace |
+|---|---|
+| `--sin-ocr` | Desactiva el OCR por completo. Las páginas escaneadas se dejan como imagen (o se omiten con `--sin-imagenes`); el informe avisa |
+| `--ocr-lang eng+spa` | Idiomas del OCR con los códigos de Tesseract unidos por `+` (`eus` = euskera). Si falta alguno, avisa y usa los que haya |
+| `--conf-ocr 60` | Solo con `--imagenes auto`: confianza mínima (0-100) para sustituir una captura por su texto; si no llega, se queda como imagen. Súbela (p. ej. 80) para ser más exigente |
+| `--dpi-ocr 250` | Resolución a la que se leen las páginas escaneadas. Más alta (300) lee mejor la letra pequeña pero tarda más. No afecta a las capturas |
 | `--tesseract RUTA` | Si Tesseract está en un sitio no habitual |
-| `--instalar-tesseract` | Instala Tesseract (winget) y descarga los idiomas eng, spa y eus |
-| `-o CARPETA` | Carpeta donde se crean las subcarpetas de salida (por defecto `salida_ia`) |
+| `--instalar-tesseract` | Instala Tesseract (winget), descarga los idiomas eng, spa y eus y sale sin convertir nada |
+
+### Detalles del texto
+
+| Opción | Qué hace |
+|---|---|
+| `--sin-paginas` | Quita las marcas `[p.N]`. Ahorra muy pocos tokens, pero pierdes la referencia de página |
+| `--sin-tablas` | No detecta tablas; su texto sale como líneas sueltas. Solo si alguna tabla sale desordenada |
+
+### Combinación recomendada para varios PDFs con código
+
+```powershell
+python conversor.py C:\Apuntes\ --unir --laminas
+```
+
+Es el modo por defecto: el código que es texto sale exacto y las capturas se quedan como imagen.
 
 ## Limitaciones conocidas
 
