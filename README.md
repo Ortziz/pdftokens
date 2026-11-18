@@ -5,20 +5,21 @@ a Claude gastando muchos menos tokens. Todo es local: no usa ninguna IA ni API.
 
 ## Instalación (Windows)
 
-1. Python 3.9 o superior.
-2. Tesseract OCR (solo si quieres OCR): instalador de UB Mannheim,
-   https://github.com/UB-Mannheim/tesseract/wiki
-   En el instalador, en "Additional language data", marca **Spanish** y **Basque** (si lo necesitas).
-3. En la carpeta del programa:
-
 ```powershell
 py -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+python conversor.py --instalar-tesseract
 ```
 
-Sin Tesseract el programa funciona igual; solo que las capturas se quedan como imagen
-y las páginas escaneadas no se leen.
+`pip` no puede instalar Tesseract porque es un programa aparte, no un paquete de Python.
+Por eso existe `--instalar-tesseract`: lo instala con `winget` (Windows puede pedir permiso
+de administrador) y descarga los idiomas inglés, español y euskera a la carpeta `tessdata`
+junto al programa. Si no tienes `winget`, instálalo a mano desde
+https://github.com/UB-Mannheim/tesseract/wiki y vuelve a ejecutar el comando para bajar los idiomas.
+
+Tesseract es opcional: sin él todo funciona igual, salvo que las páginas escaneadas
+no se leen (se dejan como imagen). En el modo por defecto las capturas ya se quedan como imagen.
 
 ## Uso
 
@@ -27,14 +28,28 @@ y las páginas escaneadas no se leen.
 python conversor.py apuntes.pdf
 
 # tus ~10 PDFs de golpe: un solo .md y pocas imágenes
-python conversor.py C:\Apuntes\ -o C:\Apuntes\para_claude --unir --laminas
+python conversor.py C:\Apuntes\ --unir --laminas
 
-# documentos en euskera / español con capturas
+# documentos en euskera / español
 python conversor.py apuntes.pdf --ocr-lang eus+spa+eng
 ```
 
+Cada conversión crea su propia carpeta dentro de `salida_ia` (cámbiala con `-o`):
+
+```text
+salida_ia/
+└── c_20261118_NombreDelPdfSinEspacios/     c_AAAAMMDD_nombre
+    ├── NombreDelPdfSinEspacios.md
+    └── F01_p2.png, F02_p4.png ...          (si hay imágenes)
+```
+
+- El nombre es `c_` + fecha (sin hora) + nombre del PDF sin espacios.
+- Si repites la conversión el mismo día, la carpeta nueva termina en `_2`, `_3`... (no pisa la anterior).
+- Una carpeta con varios PDFs sin `--unir` crea una subcarpeta por PDF; con `--unir` crea una sola
+  (`c_AAAAMMDD_documentos`, cambia el nombre con `--nombre-unido`).
+
 Al terminar muestra un informe con una **estimación** de tokens antes y después.
-Sube a Claude el `.md` y las imágenes `F01…`/`L1…` (si las hay). En el texto aparecen
+Sube a Claude el `.md` y las imágenes de esa carpeta (si las hay). En el texto aparecen
 como `[IMG F01]`.
 
 ## Qué hace con cada cosa
@@ -61,7 +76,9 @@ como `[IMG F01]`.
 | `--paginas "1-10,15"` | Solo esas páginas |
 | `--sin-paginas` | Quita las marcas `[p.N]` |
 | `--max-lado 800` | Imágenes más pequeñas (cuestan menos) |
-| `--tesseract RUTA` | Si Tesseract no está en el PATH |
+| `--tesseract RUTA` | Si Tesseract está en un sitio no habitual |
+| `--instalar-tesseract` | Instala Tesseract (winget) y descarga los idiomas eng, spa y eus |
+| `-o CARPETA` | Carpeta donde se crean las subcarpetas de salida (por defecto `salida_ia`) |
 
 ## Limitaciones conocidas
 

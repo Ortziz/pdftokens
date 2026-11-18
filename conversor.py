@@ -17,10 +17,14 @@ Todo es local. No usa ninguna IA ni API.
 """
 import argparse
 import hashlib
+import os
 import re
 import shutil
+import subprocess
 import sys
+import urllib.request
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -115,6 +119,91 @@ def fusionar_cajas(items, margen):
 # ----------------------------------------------------------------------------
 # OCR (Tesseract)
 # ----------------------------------------------------------------------------
+TESSDATA_LOCAL = Path(__file__).resolve().parent / "tessdata"   # idiomas descargados por --instalar-tesseract
+IDIOMAS_DESCARGA = ("eng", "spa", "eus")
+
+
+def buscar_tesseract():
+    """Ruta de tesseract(.exe) si está instalado (PATH o ubicaciones típicas de Windows)."""
+    en_path = shutil.which("tesseract")
+    if en_path:
+        return en_path
+    cands = [r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+             r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        cands.append(str(Path(local) / "Programs" / "Tesseract-OCR" / "tesseract.exe"))
+    for c in cands:
+        if Path(c).exists():
+            return c
+    return None
+
+
+def instalar_tesseract():
+    """Instala Tesseract (winget en Windows) y descarga los idiomas a ./tessdata."""
+    print("== Instalación de Tesseract ==")
+    exe = buscar_tesseract()
+    if exe:
+        print(f"Tesseract ya está instalado: {exe}")
+    elif sys.platform == "win32":
+        if shutil.which("winget"):
+            print("Instalando con winget (Windows puede pedirte permiso de administrador)...")
+            r = subprocess.run(["winget", "install", "-e", "--id", "UB-Mannheim.TesseractOCR",
+                                "--accept-source-agreements", "--accept-package-agreements"])
+            exe = buscar_tesseract()
+            if not exe:
+                print(f"\nNo se pudo instalar automáticamente (código {r.returncode}).")
+        else:
+            print("No encuentro 'winget' en este equipo.")
+        if not exe:
+            print("Instálalo a mano: https://github.com/UB-Mannheim/tesseract/wiki")
+            print("Después vuelve a ejecutar:  python conversor.py --instalar-tesseract")
+            return 1
+    else:
+        print("Instala Tesseract con tu gestor de paquetes (apt install tesseract-ocr / brew install tesseract)"
+              " y vuelve a ejecutar este comando para descargar los idiomas.")
+    TESSDATA_LOCAL.mkdir(exist_ok=True)
+    fallos = 0
+    for l in IDIOMAS_DESCARGA:
+        dest = TESSDATA_LOCAL / f"{l}.traineddata"
+        if dest.exists() and dest.stat().st_size > 500_000:
+            print(f"Idioma {l}: ya descargado")
+            continue
+        urls = (f"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/{l}.traineddata",
+                f"https://github.com/tesseract-ocr/tessdata_fast/raw/main/{l}.traineddata")
+        tmp = dest.with_suffix(".part")
+        error = None
+        for url in urls:
+            try:
+                with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
+                    shutil.copyfileobj(r, f)
+                if tmp.stat().st_size < 500_000:
+                    raise OSError("descarga incompleta")
+                tmp.replace(dest)
+                error = None
+                print(f"Idioma {l}: descargado")
+                break
+            except Exception as e:  # noqa: BLE001
+                tmp.unlink(missing_ok=True)
+                error = e
+        if error is not None:
+            fallos += 1
+            print(f"Idioma {l}: ERROR ({error.__class__.__name__}: {error})")
+    ocr = OCR("+".join(IDIOMAS_DESCARGA))
+    if ocr.ok and not ocr.faltan and not fallos:
+        print(f"\nListo. Tesseract funciona con: {', '.join(IDIOMAS_DESCARGA)}")
+        return 0
+    if fallos:
+        print(f"\nINCOMPLETO: no se pudieron descargar {fallos} idioma(s). Comprueba tu conexión/proxy "
+              "y vuelve a ejecutar este comando, o copia los .traineddata a la carpeta 'tessdata' "
+              "(https://github.com/tesseract-ocr/tessdata_fast).")
+    if not ocr.ok:
+        print(f"Tesseract aún no funciona: {ocr.motivo}")
+    elif ocr.faltan:
+        print(f"Faltan idiomas: {', '.join(ocr.faltan)}")
+    return 1
+
+
 class OCR:
     def __init__(self, idiomas, ruta=None, activo=True):
         self.ok = False
@@ -129,22 +218,23 @@ class OCR:
             return
         if ruta:
             pytesseract.pytesseract.tesseract_cmd = ruta
-        elif not shutil.which("tesseract"):
-            for p in (r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-                      r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"):
-                if Path(p).exists():
-                    pytesseract.pytesseract.tesseract_cmd = p
-                    break
+        else:
+            exe = buscar_tesseract()
+            if exe:
+                pytesseract.pytesseract.tesseract_cmd = exe
+        if any(TESSDATA_LOCAL.glob("*.traineddata")):
+            os.environ["TESSDATA_PREFIX"] = str(TESSDATA_LOCAL)
         try:
             disponibles = set(pytesseract.get_languages(config=""))
         except Exception as e:  # noqa: BLE001
-            self.motivo = f"no encuentro Tesseract ({e.__class__.__name__}); instálalo o usa --tesseract RUTA"
+            self.motivo = "no encuentro Tesseract. Instálalo con:  python conversor.py --instalar-tesseract"
             return
         pedidos = [l for l in idiomas.split("+") if l]
         ok = [l for l in pedidos if l in disponibles]
         self.faltan = [l for l in pedidos if l not in disponibles]
         if not ok:
-            self.motivo = f"idiomas de Tesseract no instalados: {', '.join(self.faltan)}"
+            self.motivo = (f"idiomas de Tesseract no instalados: {', '.join(self.faltan)}. "
+                           "Instálalos con:  python conversor.py --instalar-tesseract")
             return
         self.lang = "+".join(ok)
         self.ok = True
@@ -853,8 +943,11 @@ def convertir_pdf(ruta, o, ocr, estado, desplaza):
 # ----------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="PDF -> Markdown ligero para IA (todo local).")
-    ap.add_argument("pdfs", nargs="+", help="PDFs o carpetas con PDFs")
-    ap.add_argument("-o", "--salida", default="salida_ia", help="carpeta de salida")
+    ap.add_argument("pdfs", nargs="*", help="PDFs o carpetas con PDFs")
+    ap.add_argument("-o", "--salida", default="salida_ia",
+                    help="carpeta donde se crea una subcarpeta c_AAAAMMDD_nombre por cada conversión")
+    ap.add_argument("--instalar-tesseract", action="store_true",
+                    help="instala Tesseract (winget) y descarga los idiomas eng, spa y eus; luego sale")
     ap.add_argument("--unir", action="store_true", help="un solo .md con todos los PDFs")
     ap.add_argument("--nombre-unido", default="documentos", help="nombre del .md unido")
     ap.add_argument("--laminas", action="store_true",
@@ -883,6 +976,11 @@ def main():
     if o.sin_imagenes:
         o.imagenes = "omitir"
 
+    if o.instalar_tesseract:
+        sys.exit(instalar_tesseract())
+    if not o.pdfs:
+        ap.error("indica al menos un PDF o una carpeta con PDFs (o usa --instalar-tesseract)")
+
     rutas = []
     for p in o.pdfs:
         pp = Path(p)
@@ -891,15 +989,39 @@ def main():
     if not rutas:
         sys.exit("No he encontrado ningún PDF.")
 
-    salida = Path(o.salida)
-    salida.mkdir(parents=True, exist_ok=True)
+    padre = Path(o.salida)
+    padre.mkdir(parents=True, exist_ok=True)
     ocr = OCR(o.ocr_lang, o.tesseract, activo=not o.sin_ocr)
     if not ocr.ok:
         print(f"AVISO: OCR no disponible: {ocr.motivo}", file=sys.stderr)
     elif ocr.faltan:
-        print(f"AVISO: faltan idiomas de Tesseract: {', '.join(ocr.faltan)} (uso {ocr.lang})",
-              file=sys.stderr)
+        print(f"AVISO: faltan idiomas de Tesseract: {', '.join(ocr.faltan)} (uso {ocr.lang}). "
+              "Instálalos con:  python conversor.py --instalar-tesseract", file=sys.stderr)
 
+    fecha = datetime.now().strftime("%Y%m%d")
+    trabajos = [(rutas, o.nombre_unido)] if o.unir else [([r], r.stem) for r in rutas]
+    for grupo, nombre in trabajos:
+        procesar_trabajo(grupo, nombre, padre, fecha, o, ocr)
+
+
+def nombre_limpio(nombre):
+    """Nombre sin espacios ni caracteres no válidos en Windows."""
+    return re.sub(r'[\s<>:"/\\|?*]+', "", nombre) or "documento"
+
+
+def carpeta_nueva(padre, fecha, nombre):
+    """c_AAAAMMDD_nombre; si ya existe (misma fecha y nombre) añade _2, _3..."""
+    base = f"c_{fecha}_{nombre_limpio(nombre)}"
+    ruta, n = padre / base, 1
+    while ruta.exists():
+        n += 1
+        ruta = padre / f"{base}_{n}"
+    ruta.mkdir(parents=True)
+    return ruta
+
+
+def procesar_trabajo(rutas, nombre, padre, fecha, o, ocr):
+    """Convierte uno o varios PDFs (--unir) en UNA carpeta de salida propia."""
     estado = dict(n_fig=0, figuras=[])
     docs = []
     for r in rutas:
@@ -909,14 +1031,18 @@ def main():
             print(f"ERROR en {r.name}: {e.__class__.__name__}: {e}", file=sys.stderr)
             continue
         docs.append((r, md, st, av))
+    if not docs:
+        return
+    salida = carpeta_nueva(padre, fecha, nombre)
+    base = nombre_limpio(nombre)
 
     # guardar markdown
     if o.unir:
         trozos = [f"# Documento: {r.stem}\n\n{md}" for r, md, _, _ in docs]
-        (salida / f"{o.nombre_unido}.md").write_text("\n\n".join(trozos), encoding="utf-8")
+        (salida / f"{base}.md").write_text("\n\n".join(trozos), encoding="utf-8")
     else:
-        for r, md, _, _ in docs:
-            (salida / f"{r.stem}.md").write_text(f"# {r.stem}\n\n{md}", encoding="utf-8")
+        r, md = docs[0][0], docs[0][1]
+        (salida / f"{base}.md").write_text(f"# {r.stem}\n\n{md}", encoding="utf-8")
 
     # guardar imágenes
     tokens_img = 0
@@ -928,7 +1054,6 @@ def main():
                 hoja.save(salida / f"L{k}.png", optimize=True)
                 tokens_img += tok_imagen(*hoja.size)
                 n_archivos_img += 1
-            print("Láminas:", file=sys.stderr)
         else:
             for fid, pag, im in figs:
                 im.save(salida / f"{fid}_p{pag}.png", optimize=True)
@@ -936,7 +1061,7 @@ def main():
                 n_archivos_img += 1
 
     # informe
-    print("\n===== INFORME (estimaciones, ±25%) =====")
+    print(f"\n===== INFORME: {salida.name} (estimaciones, ±25%) =====")
     tot_orig = tot_txt = 0
     for r, md, st, av in docs:
         t = tok_texto(md)
@@ -972,7 +1097,7 @@ def main():
               "su contenido visual no llega a la IA.")
     print(f"\nSalida en: {salida.resolve()}")
     if figs:
-        print("Sube el .md junto con las imágenes; en el texto aparecen como [IMG Fnn].")
+        print("Sube el .md junto con las imágenes de esa carpeta; en el texto aparecen como [IMG Fnn].")
 
 
 if __name__ == "__main__":
