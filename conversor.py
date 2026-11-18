@@ -17,6 +17,7 @@ Todo es local. No usa ninguna IA ni API.
 """
 import argparse
 import hashlib
+import logging
 import os
 import re
 import shutil
@@ -43,6 +44,10 @@ except ImportError:  # el programa funciona sin OCR
 DPI_FIGURA = 200            # resolución a la que se recortan las figuras
 TOKENS_MAX_IMAGEN = 1600    # Claude escala las imágenes grandes hasta ~1.600 tokens
 CHARS_POR_TOKEN = 3.3       # estimación conservadora para español/euskera/código
+
+# pdfminer (usado por pdfplumber) avisa de cada fuente sin datos de tamaño ("Could not get
+# FontBBox..."): es inofensivo, no afecta al texto, y llena la consola.
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
 MONO = re.compile(r"(mono|courier|consolas|menlo|lucida\s*console|typewriter|code)", re.I)
 BOLD = re.compile(r"(bold|black|heavy|semibold|demi)", re.I)
@@ -665,7 +670,8 @@ def analizar_pagina(pg, doc, idx, o, ocr, aviso):
         res["items"].append(dict(kind="linea", top=l["top"], bottom=l["bottom"], x0=l["x0"],
                                  x1=l["x1"], text=limpiar(l["text"]) if not mono else
                                  texto_mono(l["chars"]),
-                                 size=tam, bold=negrita, mono=mono, zona=_zona(l, H)))
+                                 size=tam, bold=negrita, mono=mono, zona=_zona(l, H),
+                                 fuente=Counter(fuentes).most_common(1)[0][0]))
     return res
 
 
@@ -918,24 +924,23 @@ def convertir_pdf(ruta, o, ocr, estado, desplaza):
     md = re.sub(r"(?m)^(- .*)\n\n(?=- )", r"\1\n", md)       # listas sin líneas en blanco
     md = re.sub(r"\n{3,}", "\n\n", md).strip() + "\n"
 
-    # aviso: código que no se detectó como tal (fuente no monoespaciada)
+    # aviso: líneas que parecen código pero no están en fuente monoespaciada
     patron = re.compile(r"(^\s*(def |class |import |from \S+ import |#include|public |private |"
                         r"function |const |let |var |return\b|SELECT |INSERT |CREATE TABLE))|"
                         r"([;{}]\s*$)|(=>)|(\)\s*\{)")
-    pag_actual, en_codigo, sospechosas = None, False, Counter()
-    for linea in md.split("\n"):
-        if linea.startswith("```"):
-            en_codigo = not en_codigo
-            continue
-        m = re.match(r"^\[p\.(\d+)\]$", linea)
-        if m:
-            pag_actual = int(m.group(1))
-        elif not en_codigo and patron.search(linea):
-            sospechosas[pag_actual] += 1
-    for p, c in sorted(sospechosas.items(), key=lambda x: (x[0] is None, x[0])):
-        if c >= 2:
-            aviso(f"página {p}: {c} líneas parecen código pero no se detectó como bloque de código "
-                  "(fuente no monoespaciada); revísalo en el .md")
+    sosp = {}
+    for d in datos:
+        for it in d["items"]:
+            if it["kind"] == "linea" and not it["mono"] and patron.search(it["text"]):
+                e = sosp.setdefault(d["num"], dict(n=0, fuentes=Counter(), ejemplo=it["text"]))
+                e["n"] += 1
+                e["fuentes"][re.sub(r"^[A-Z]{6}\+", "", it.get("fuente", "?"))] += 1
+    for p in sorted(sosp):
+        e = sosp[p]
+        if e["n"] >= 2:
+            fu = ", ".join(f for f, _ in e["fuentes"].most_common(2))
+            aviso(f"página {p}: {e['n']} líneas parecen código pero no están en fuente monoespaciada "
+                  f"(fuente: {fu}). Ej.: «{e['ejemplo'][:70]}»")
 
     stats = dict(paginas=n, raw_tokens=sum(d["raw_tokens"] for d in datos),
                  quitadas=quitadas, escaneadas=sum(1 for d in datos if d["escaneada"]),
